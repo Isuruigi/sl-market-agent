@@ -67,5 +67,5 @@ class Config:
             print(f"   - LangSmith: Disabled (optional)")
         print(f"   - Model: {cls.LLM_MODEL}")
 
-# Validate on import
-Config.validate()
+# Validate on import - REMOVED to allow handling in UI
+# Config.validate()

@@ -31,7 +31,11 @@ def main():
     """Run the main application."""
     print_banner()
     
-    # Initialize agent with verbose mode off by default
+    # Validate configuration
+    try:
+        Config.validate()
+    except ValueError:
+        return
     try:
         agent = MarketAgent(verbose=False)
         verbose_mode = False

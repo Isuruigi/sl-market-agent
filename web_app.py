@@ -32,10 +32,30 @@ def load_agent():
 
 # Load agent
 try:
+    from src.config import Config
+    Config.validate()
     agent = load_agent()
+except ValueError as e:
+    st.error("⚙️ Configuration Error")
+    st.warning("Your API keys are missing or invalid.")
+    
+    st.markdown("""
+    ### 🛠️ How to Fix on Streamlit Cloud
+    
+    1. Go to your app dashboard
+    2. Click **Settings** (top right) -> **Secrets**
+    3. Paste your keys like this:
+    
+    ```toml
+    GROQ_API_KEY = "gsk_..."
+    LANGSMITH_API_KEY = "lsv2_..."
+    ```
+    
+    [See Deployment Guide](https://github.com/Isuruigi/sl-market-agent/blob/main/DEPLOYMENT.md)
+    """)
+    st.stop()
 except Exception as e:
     st.error(f"❌ Failed to initialize agent: {e}")
-    st.info("Please check your .env file and ensure GROQ_API_KEY is set correctly.")
     st.stop()
 
 # Initialize chat history in session state
