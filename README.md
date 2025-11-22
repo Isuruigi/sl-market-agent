@@ -12,6 +12,12 @@ AI-powered assistant for Sri Lankan economic analysis and market intelligence wi
 - 🔄 **Retry Logic** - Exponential backoff for resilience
 - 📊 **LangSmith Monitoring** - Optional observability (free tier)
 
+## 📚 Documentation
+
+- [**🚀 Quick Start**](QUICKSTART.md) - Get up and running fast
+- [**☁️ Deployment Guide**](DEPLOYMENT.md) - Deploy to Streamlit Cloud
+- [**🗺️ Roadmap**](ROADMAP.md) - Future features & implementation guide
+
 ## 🚀 Tech Stack
 
 - **LLM:** Groq (llama-3.3-70b-versatile) with retry logic
