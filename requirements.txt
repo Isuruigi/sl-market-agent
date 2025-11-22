@@ -1,0 +1,30 @@
+# Core LLM and Agent Framework
+langchain>=0.1.0
+langchain-groq
+langchain-community
+
+# Vector Store and Embeddings
+sentence-transformers
+faiss-cpu
+
+# Data Processing
+numpy
+pandas
+python-dotenv
+
+# Web Tools
+requests
+beautifulsoup4
+
+# Monitoring
+langsmith
+
+# Utilities
+pydantic>=2.0.0
+
+# Testing (optional - for development)
+pytest
+pytest-asyncio
+
+# Web Interface
+streamlit>=1.29.0
