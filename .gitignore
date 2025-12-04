@@ -73,5 +73,5 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# Streamlit
-.streamlit/
+# Streamlit secrets only (keep config.toml for deployment)
+.streamlit/secrets.toml
