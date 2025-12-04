@@ -1,52 +1,45 @@
-"""GROQ LLM Wrapper using LangChain"""
+"""GROQ LLM Wrapper using direct Groq SDK (lightweight, no LangChain)"""
 
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from typing import List, Dict, Optional
+import os
 import time
-from ..config import Config
+from typing import List, Dict, Optional
+
+# Import Groq SDK
+try:
+    from groq import Groq
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
+    Groq = None
 
 
 class GroqLLM:
-    """Production-ready GROQ LLM wrapper with retry logic and monitoring"""
+    """Production-ready GROQ LLM wrapper with retry logic"""
+    
+    # Default configuration
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    DEFAULT_TEMPERATURE = 0.7
+    DEFAULT_MAX_TOKENS = 2048
     
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize the Groq LLM with LangChain.
+        """Initialize the Groq LLM.
         
         Args:
-            api_key: Groq API key. If None, uses the key from Config.
+            api_key: Groq API key. If None, uses GROQ_API_KEY env var.
         """
-        self.api_key = api_key or Config.GROQ_API_KEY
-        self.llm = ChatGroq(
-            groq_api_key=self.api_key,
-            model_name=Config.LLM_MODEL,
-            temperature=Config.TEMPERATURE,
-            max_tokens=Config.MAX_TOKENS
-        )
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("GROQ_API_KEY not found in environment variables")
+        
+        if not HAS_GROQ:
+            raise ImportError("groq package not installed. Run: pip install groq")
+        
+        self.client = Groq(api_key=self.api_key)
+        self.model = os.getenv("LLM_MODEL", self.DEFAULT_MODEL)
+        self.temperature = float(os.getenv("TEMPERATURE", str(self.DEFAULT_TEMPERATURE)))
+        self.max_tokens = int(os.getenv("MAX_TOKENS", str(self.DEFAULT_MAX_TOKENS)))
         self.call_count = 0
-    
-    def _format_messages(self, messages: List[Dict[str, str]]) -> List:
-        """Convert dict messages to LangChain message objects.
-        
-        Args:
-            messages: List of message dictionaries with 'role' and 'content'.
-            
-        Returns:
-            List of LangChain message objects.
-        """
-        formatted = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == "system":
-                formatted.append(SystemMessage(content=content))
-            elif role == "user":
-                formatted.append(HumanMessage(content=content))
-            elif role == "assistant":
-                formatted.append(AIMessage(content=content))
-        
-        return formatted
     
     def generate(
         self, 
@@ -56,7 +49,7 @@ class GroqLLM:
         """Generate response with retry logic.
         
         Args:
-            messages: List of message dictionaries.
+            messages: List of message dictionaries with 'role' and 'content'.
             max_retries: Maximum number of retry attempts.
             
         Returns:
@@ -68,14 +61,19 @@ class GroqLLM:
         for attempt in range(max_retries):
             try:
                 start = time.time()
-                formatted = self._format_messages(messages)
-                response = self.llm.invoke(formatted)
-                elapsed = time.time() - start
                 
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
+                )
+                
+                elapsed = time.time() - start
                 self.call_count += 1
                 print(f"✅ LLM call #{self.call_count} ({elapsed:.1f}s)")
                 
-                return response.content
+                return response.choices[0].message.content
                 
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -123,15 +121,23 @@ class GroqLLM:
         Yields:
             Chunks of the response as they arrive.
         """
-        formatted = self._format_messages(messages)
-        for chunk in self.llm.stream(formatted):
-            yield chunk.content
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True
+        )
+        
+        for chunk in response:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
 
 def test_llm():
     """Test LLM functionality"""
     print("\n" + "="*60)
-    print("TESTING GROQ LLM")
+    print("TESTING GROQ LLM (Direct SDK)")
     print("="*60 + "\n")
     
     llm = GroqLLM()
@@ -143,7 +149,7 @@ def test_llm():
     print("Test 2: Conversation")
     messages = [
         {"role": "system", "content": "You are an expert on Sri Lankan economics."},
-        {"role": "user", "content": "What are Sri Lanka's main exports?"}
+        {"role": "user", "content": "What are Sri Lanka's main exports? Answer briefly."}
     ]
     response = llm.generate(messages)
     print(f"Response: {response}\n")
