@@ -1,15 +1,22 @@
-"""Simple RAG system with vector storage using sentence transformers"""
+"""Simple RAG system with TF-IDF vectorization (lightweight, no PyTorch needed)"""
 
-from sentence_transformers import SentenceTransformer
 import numpy as np
 from typing import List, Dict, Optional
 import pickle
 from pathlib import Path
-from ..config import Config
+import os
+
+# Try to import sklearn, fallback to simple keyword matching if not available
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
 
 
 class VectorStore:
-    """Simple RAG with sentence transformers and numpy similarity search"""
+    """Lightweight RAG with TF-IDF vectorization (works on Streamlit Cloud)"""
     
     def __init__(self, collection_name: str = "market_data"):
         """Initialize the vector store.
@@ -18,11 +25,14 @@ class VectorStore:
             collection_name: Name of the collection (used for file naming).
         """
         self.collection_name = collection_name
-        print("📦 Loading embedding model...")
-        self.encoder = SentenceTransformer(Config.EMBEDDING_MODEL)
         self.documents = []
-        self.embeddings = None
-        self.store_path = Config.VECTOR_STORE_PATH / f"{collection_name}.pkl"
+        self.vectorizer = None
+        self.tfidf_matrix = None
+        
+        # Use a simple path that works on Streamlit Cloud
+        self.store_path = Path("data") / "vector_store" / f"{collection_name}.pkl"
+        
+        print("📦 Initializing lightweight vector store (TF-IDF)...")
         
         # Try to load existing store
         self._load()
@@ -38,25 +48,40 @@ class VectorStore:
         
         Args:
             documents: List of document texts.
-            metadatas: Optional list of metadata dictionaries (not used in simple version).
-            ids: Optional list of document IDs (not used in simple version).
-            chunk: Whether to chunk documents (not implemented in simple version).
+            metadatas: Optional list of metadata dictionaries (not used).
+            ids: Optional list of document IDs (not used).
+            chunk: Whether to chunk documents (not used).
         """
         if not documents:
             return
         
         print(f"📝 Adding {len(documents)} documents...")
-        new_embeddings = self.encoder.encode(documents, show_progress_bar=False)
-        
         self.documents.extend(documents)
         
-        if self.embeddings is None:
-            self.embeddings = new_embeddings
-        else:
-            self.embeddings = np.vstack([self.embeddings, new_embeddings])
+        # Rebuild TF-IDF matrix with all documents
+        self._rebuild_index()
         
         print(f"✅ Total documents: {len(self.documents)}")
         self._save()
+    
+    def _rebuild_index(self):
+        """Rebuild the TF-IDF index."""
+        if not self.documents:
+            self.vectorizer = None
+            self.tfidf_matrix = None
+            return
+        
+        if HAS_SKLEARN:
+            self.vectorizer = TfidfVectorizer(
+                stop_words='english',
+                max_features=5000,
+                ngram_range=(1, 2)
+            )
+            self.tfidf_matrix = self.vectorizer.fit_transform(self.documents)
+        else:
+            # Fallback: simple word frequency
+            self.vectorizer = None
+            self.tfidf_matrix = None
     
     def query(
         self,
@@ -69,7 +94,7 @@ class VectorStore:
         Args:
             query_text: Query text.
             n_results: Number of results to return.
-            filter_dict: Optional metadata filter (not used in simple version).
+            filter_dict: Optional metadata filter (not used).
             
         Returns:
             List of result dictionaries with text and score.
@@ -77,10 +102,20 @@ class VectorStore:
         if not self.documents:
             return []
         
-        query_embedding = self.encoder.encode([query_text])[0]
-        
-        # Compute cosine similarity
-        similarities = np.dot(self.embeddings, query_embedding)
+        if HAS_SKLEARN and self.vectorizer is not None:
+            # TF-IDF based search
+            query_vec = self.vectorizer.transform([query_text])
+            similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
+        else:
+            # Fallback: simple keyword matching
+            query_words = set(query_text.lower().split())
+            similarities = []
+            for doc in self.documents:
+                doc_words = set(doc.lower().split())
+                overlap = len(query_words & doc_words)
+                score = overlap / max(len(query_words), 1)
+                similarities.append(score)
+            similarities = np.array(similarities)
         
         # Get top k indices
         top_k = min(n_results, len(self.documents))
@@ -149,13 +184,15 @@ class VectorStore:
     
     def _save(self):
         """Save store to disk."""
-        Config.VECTOR_STORE_PATH.mkdir(parents=True, exist_ok=True)
-        data = {
-            "documents": self.documents,
-            "embeddings": self.embeddings
-        }
-        with open(self.store_path, 'wb') as f:
-            pickle.dump(data, f)
+        try:
+            self.store_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "documents": self.documents,
+            }
+            with open(self.store_path, 'wb') as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            print(f"⚠️  Could not save vector store: {e}")
     
     def _load(self):
         """Load store from disk."""
@@ -163,8 +200,8 @@ class VectorStore:
             try:
                 with open(self.store_path, 'rb') as f:
                     data = pickle.load(f)
-                    self.documents = data["documents"]
-                    self.embeddings = data["embeddings"]
+                    self.documents = data.get("documents", [])
+                    self._rebuild_index()
                 print(f"✅ Loaded {len(self.documents)} documents from storage")
             except Exception as e:
                 print(f"⚠️  Could not load vector store: {e}")
@@ -172,9 +209,13 @@ class VectorStore:
     def clear(self):
         """Clear all documents from the collection."""
         self.documents = []
-        self.embeddings = None
+        self.vectorizer = None
+        self.tfidf_matrix = None
         if self.store_path.exists():
-            self.store_path.unlink()
+            try:
+                self.store_path.unlink()
+            except:
+                pass
         print("🗑️  Vector store cleared")
     
     def count(self) -> int:
@@ -197,7 +238,7 @@ class VectorStore:
 def test_rag():
     """Test RAG system"""
     print("\n" + "="*60)
-    print("TESTING RAG SYSTEM")
+    print("TESTING RAG SYSTEM (TF-IDF)")
     print("="*60 + "\n")
     
     rag = VectorStore("test_collection")
