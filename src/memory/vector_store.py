@@ -1,41 +1,37 @@
-"""Simple RAG system with TF-IDF vectorization (lightweight, no PyTorch needed)"""
+"""Simple keyword-based search (no external ML dependencies)"""
 
-import numpy as np
 from typing import List, Dict, Optional
 import pickle
 from pathlib import Path
-import os
-
-# Try to import sklearn, fallback to simple keyword matching if not available
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    HAS_SKLEARN = True
-except ImportError:
-    HAS_SKLEARN = False
+import re
 
 
 class VectorStore:
-    """Lightweight RAG with TF-IDF vectorization (works on Streamlit Cloud)"""
+    """Simple keyword-based search (works anywhere, no dependencies)"""
     
     def __init__(self, collection_name: str = "market_data"):
         """Initialize the vector store.
         
         Args:
-            collection_name: Name of the collection (used for file naming).
+            collection_name: Name of the collection.
         """
         self.collection_name = collection_name
         self.documents = []
-        self.vectorizer = None
-        self.tfidf_matrix = None
         
-        # Use a simple path that works on Streamlit Cloud
+        # Simple path that works on Streamlit Cloud
         self.store_path = Path("data") / "vector_store" / f"{collection_name}.pkl"
         
-        print("📦 Initializing lightweight vector store (TF-IDF)...")
-        
-        # Try to load existing store
+        print("📦 Initializing keyword-based search...")
         self._load()
+    
+    def _tokenize(self, text: str) -> set:
+        """Simple tokenization."""
+        # Lowercase, remove punctuation, split on whitespace
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', ' ', text)
+        words = set(text.split())
+        # Remove very short words
+        return {w for w in words if len(w) > 2}
     
     def add_documents(
         self,
@@ -44,44 +40,14 @@ class VectorStore:
         ids: Optional[List[str]] = None,
         chunk: bool = False
     ):
-        """Add documents to the knowledge base.
-        
-        Args:
-            documents: List of document texts.
-            metadatas: Optional list of metadata dictionaries (not used).
-            ids: Optional list of document IDs (not used).
-            chunk: Whether to chunk documents (not used).
-        """
+        """Add documents to the knowledge base."""
         if not documents:
             return
         
         print(f"📝 Adding {len(documents)} documents...")
         self.documents.extend(documents)
-        
-        # Rebuild TF-IDF matrix with all documents
-        self._rebuild_index()
-        
         print(f"✅ Total documents: {len(self.documents)}")
         self._save()
-    
-    def _rebuild_index(self):
-        """Rebuild the TF-IDF index."""
-        if not self.documents:
-            self.vectorizer = None
-            self.tfidf_matrix = None
-            return
-        
-        if HAS_SKLEARN:
-            self.vectorizer = TfidfVectorizer(
-                stop_words='english',
-                max_features=5000,
-                ngram_range=(1, 2)
-            )
-            self.tfidf_matrix = self.vectorizer.fit_transform(self.documents)
-        else:
-            # Fallback: simple word frequency
-            self.vectorizer = None
-            self.tfidf_matrix = None
     
     def query(
         self,
@@ -89,43 +55,31 @@ class VectorStore:
         n_results: int = 5,
         filter_dict: Optional[Dict] = None
     ) -> List[Dict]:
-        """Search for relevant documents.
-        
-        Args:
-            query_text: Query text.
-            n_results: Number of results to return.
-            filter_dict: Optional metadata filter (not used).
-            
-        Returns:
-            List of result dictionaries with text and score.
-        """
+        """Search for relevant documents using keyword matching."""
         if not self.documents:
             return []
         
-        if HAS_SKLEARN and self.vectorizer is not None:
-            # TF-IDF based search
-            query_vec = self.vectorizer.transform([query_text])
-            similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
-        else:
-            # Fallback: simple keyword matching
-            query_words = set(query_text.lower().split())
-            similarities = []
-            for doc in self.documents:
-                doc_words = set(doc.lower().split())
-                overlap = len(query_words & doc_words)
-                score = overlap / max(len(query_words), 1)
-                similarities.append(score)
-            similarities = np.array(similarities)
+        query_tokens = self._tokenize(query_text)
         
-        # Get top k indices
+        # Score each document by keyword overlap
+        scores = []
+        for doc in self.documents:
+            doc_tokens = self._tokenize(doc)
+            # Jaccard-like overlap score
+            overlap = len(query_tokens & doc_tokens)
+            score = overlap / max(len(query_tokens), 1)
+            scores.append(score)
+        
+        # Get top k
         top_k = min(n_results, len(self.documents))
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
+        indexed_scores = [(i, s) for i, s in enumerate(scores)]
+        indexed_scores.sort(key=lambda x: x[1], reverse=True)
         
         results = []
-        for idx in top_indices:
+        for idx, score in indexed_scores[:top_k]:
             results.append({
                 "text": self.documents[idx],
-                "score": float(similarities[idx])
+                "score": score
             })
         
         return results
@@ -135,15 +89,7 @@ class VectorStore:
         query: str,
         n_results: int = 3
     ) -> List[str]:
-        """Get relevant context documents for a query.
-        
-        Args:
-            query: Query text.
-            n_results: Number of results to return.
-            
-        Returns:
-            List of relevant document texts.
-        """
+        """Get relevant context documents."""
         results = self.query(query, n_results)
         return [result["text"] for result in results]
     
@@ -152,27 +98,12 @@ class VectorStore:
         query: str,
         k: int = 3
     ) -> List[tuple]:
-        """Search with similarity scores.
-        
-        Args:
-            query: Query text.
-            k: Number of results.
-            
-        Returns:
-            List of (text, score) tuples.
-        """
+        """Search with similarity scores."""
         results = self.query(query, k)
         return [(result["text"], result["score"]) for result in results]
     
     def format_context(self, results: List[Dict]) -> str:
-        """Format search results for LLM context.
-        
-        Args:
-            results: List of search results.
-            
-        Returns:
-            Formatted context string.
-        """
+        """Format search results for LLM context."""
         if not results:
             return ""
         
@@ -186,13 +117,10 @@ class VectorStore:
         """Save store to disk."""
         try:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "documents": self.documents,
-            }
             with open(self.store_path, 'wb') as f:
-                pickle.dump(data, f)
+                pickle.dump({"documents": self.documents}, f)
         except Exception as e:
-            print(f"⚠️  Could not save vector store: {e}")
+            print(f"⚠️  Could not save: {e}")
     
     def _load(self):
         """Load store from disk."""
@@ -201,83 +129,53 @@ class VectorStore:
                 with open(self.store_path, 'rb') as f:
                     data = pickle.load(f)
                     self.documents = data.get("documents", [])
-                    self._rebuild_index()
-                print(f"✅ Loaded {len(self.documents)} documents from storage")
+                print(f"✅ Loaded {len(self.documents)} documents")
             except Exception as e:
-                print(f"⚠️  Could not load vector store: {e}")
+                print(f"⚠️  Could not load: {e}")
     
     def clear(self):
-        """Clear all documents from the collection."""
+        """Clear all documents."""
         self.documents = []
-        self.vectorizer = None
-        self.tfidf_matrix = None
         if self.store_path.exists():
             try:
                 self.store_path.unlink()
             except:
                 pass
-        print("🗑️  Vector store cleared")
+        print("🗑️  Cleared")
     
     def count(self) -> int:
-        """Get the number of documents in the collection.
-        
-        Returns:
-            Number of documents.
-        """
+        """Get document count."""
         return len(self.documents)
     
     def as_retriever(self, **kwargs):
-        """Get a retriever interface (placeholder for LangChain compatibility).
-        
-        Returns:
-            Self as a simple retriever.
-        """
+        """LangChain compatibility placeholder."""
         return self
 
 
 def test_rag():
-    """Test RAG system"""
+    """Test the search system"""
     print("\n" + "="*60)
-    print("TESTING RAG SYSTEM (TF-IDF)")
+    print("TESTING KEYWORD SEARCH")
     print("="*60 + "\n")
     
-    rag = VectorStore("test_collection")
-    
-    # Clear any existing data
+    rag = VectorStore("test")
     rag.clear()
     
-    # Add sample documents
     docs = [
         "Sri Lanka's GDP growth was 5.3% in 2023.",
-        "The Central Bank of Sri Lanka manages monetary policy.",
         "Tea is Sri Lanka's largest export commodity.",
-        "Colombo is the commercial capital of Sri Lanka.",
-        "The main industries include tourism, textiles, and agriculture.",
+        "Colombo is the commercial capital.",
     ]
     
     rag.add_documents(docs)
     
-    # Test search
-    query = "What is Sri Lanka's economic growth?"
-    print(f"Query: {query}")
-    results = rag.query(query, n_results=2)
+    results = rag.query("GDP economic growth", n_results=2)
+    print(f"Query: GDP economic growth")
+    print(f"Results: {len(results)}")
+    for r in results:
+        print(f"  - Score {r['score']:.2f}: {r['text'][:50]}...")
     
-    print(f"\nTop {len(results)} results:")
-    for result in results:
-        print(f"  Score: {result['score']:.3f}")
-        print(f"  Text: {result['text']}\n")
-    
-    # Test context retrieval
-    context = rag.get_relevant_context("exports", n_results=2)
-    print(f"Context for 'exports': {len(context)} documents")
-    for doc in context:
-        print(f"  - {doc}")
-    
-    print("\n" + "="*60)
-    print(f"✅ RAG test complete - {rag.count()} documents stored")
-    print("="*60)
-    
-    # Cleanup
+    print("\n✅ Test complete")
     rag.clear()
 
 
